@@ -4,50 +4,142 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // --- Helper Functions ---
+    // ===========================
+    // HELPER FUNCTIONS
+    // ===========================
+
+    // Authentication check
     function isAuthenticated() {
       return request.auth != null;
     }
 
+    // Non-anonymous user check
     function isNotAnonymous() {
       return isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous';
     }
 
+    // Owner check: user can only manage their own data
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
-    
+
+    // User creating content with their own ID
     function isCreatingOwnContent() {
       return request.resource.data.userId == request.auth.uid;
     }
 
-    // --- Collection Rules ---
-
-    // Recommendations can be read by anyone, but only created by authenticated users for themselves.
-    match /recommendations/{recommendationId} {
-      allow get, list: if true;
-      allow create: if isAuthenticated() && isCreatingOwnContent();
-      allow update: if isOwner(resource.data.userId); // Allow update only by the owner
-      allow delete: if false; // Disallow deletion for now
+    // Data validation helpers
+    function isValidString(field) {
+      return field is string && field.size() > 0 && field.size() <= 2000;
     }
 
-    // Users can only manage their own document.
+    function isValidEmail(email) {
+      return email is string && email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
+    }
+
+    function isValidSector() {
+      let sectors = ['Tecnología', 'Salud', 'Finanzas', 'Educación', 'Marketing', 'Artes Creativas', 'Ingeniería', 'Legal', 'Hostelería', 'Venta Minorista', 'Manufactura', 'Otro'];
+      return request.resource.data.professionalSector == null || request.resource.data.professionalSector in sectors;
+    }
+
+    // ===========================
+    // USERS COLLECTION
+    // ===========================
     match /users/{userId} {
-      allow get, update: if isOwner(userId);
-      allow create: if isOwner(userId);
-      allow list, delete: if false; // Nobody can list all users or delete accounts from client
+      // Users can only read and update their own profile
+      allow get: if isOwner(userId);
+      
+      allow create: if isOwner(userId) &&
+        request.resource.data.keys().hasAll(['name', 'email']) &&
+        isValidString(request.resource.data.name) &&
+        isValidEmail(request.resource.data.email) &&
+        isValidSector();
+
+      allow update: if isOwner(userId) &&
+        // Only allow updating name, email, and professionalSector
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'email', 'professionalSector'])) &&
+        isValidString(request.resource.data.name) &&
+        isValidEmail(request.resource.data.email) &&
+        isValidSector();
+
+      // Prevent listing all users and deleting profiles from client
+      allow list, delete: if false;
     }
 
-    // Chat is only for authenticated, non-anonymous users.
-    match /chatMessages/{messageId} {
-      allow list, create: if isNotAnonymous();
-      allow get, update, delete: if false; // Chat history is immutable
+    // ===========================
+    // RECOMMENDATIONS COLLECTION
+    // ===========================
+    match /recommendations/{recommendationId} {
+      // Anyone can read recommendations (publicly visible)
+      allow get, list: if true;
+
+      // Only authenticated users can create recommendations for themselves
+      allow create: if isAuthenticated() &&
+        isCreatingOwnContent() &&
+        request.resource.data.keys().hasAll(['userId', 'userName', 'text', 'sector', 'createdAt']) &&
+        isValidString(request.resource.data.text) &&
+        request.resource.data.sector in ['Tecnología', 'Salud', 'Finanzas', 'Educación', 'Marketing', 'Artes Creativas', 'Ingeniería', 'Legal', 'Hostelería', 'Venta Minorista', 'Manufactura', 'Otro'] &&
+        isValidString(request.resource.data.userName) &&
+        request.resource.data.createdAt == request.time;
+
+      // Only the owner can update their recommendations
+      allow update: if isOwner(resource.data.userId) &&
+        // Only allow updating non-critical fields
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['userName', 'text', 'userSector'])) &&
+        isValidString(request.resource.data.text) &&
+        (request.resource.data.userSector == null || request.resource.data.userSector in ['Tecnología', 'Salud', 'Finanzas', 'Educación', 'Marketing', 'Artes Creativas', 'Ingeniería', 'Legal', 'Hostelería', 'Venta Minorista', 'Manufactura', 'Otro']);
+
+      // Prevent deletion from client (audit trail)
+      allow delete: if false;
     }
-    
-    // Summarized feedback logs can be read and created by any authenticated user.
+
+    // ===========================
+    // CHAT MESSAGES COLLECTION
+    // ===========================
+    match /chatMessages/{messageId} {
+      // Non-anonymous authenticated users can read and create chat messages
+      allow list: if isNotAnonymous();
+
+      allow create: if isNotAnonymous() &&
+        isCreatingOwnContent() &&
+        request.resource.data.keys().hasAll(['userId', 'userName', 'text', 'createdAt']) &&
+        isValidString(request.resource.data.text) &&
+        isValidString(request.resource.data.userName) &&
+        request.resource.data.createdAt == request.time &&
+        (request.resource.data.isModerated == null || request.resource.data.isModerated is bool);
+
+      // Allow getting individual messages
+      allow get: if isNotAnonymous();
+
+      // Chat messages are immutable (no updates or deletes from client)
+      allow update, delete: if false;
+    }
+
+    // ===========================
+    // SUMMARIZED FEEDBACK LOGS COLLECTION
+    // ===========================
     match /summarizedFeedbackLogs/{logId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if false; // Logs are immutable
+      // Authenticated users (including anonymous) can read all feedback logs
+      allow list, get: if isAuthenticated();
+
+      // Only authenticated users can create feedback logs
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasAll(['originalFeedbackText', 'summaryText', 'createdAt']) &&
+        isValidString(request.resource.data.originalFeedbackText) &&
+        isValidString(request.resource.data.summaryText) &&
+        request.resource.data.createdAt == request.time &&
+        // userId is optional and can be null for anonymous submissions
+        (request.resource.data.userId == null || request.resource.data.userId is string);
+
+      // Feedback logs are immutable (audit trail)
+      allow update, delete: if false;
+    }
+
+    // ===========================
+    // CATCH-ALL (DENY ALL BY DEFAULT)
+    // ===========================
+    match /{allPaths=**} {
+      allow read, write: if false;
     }
   }
 }
