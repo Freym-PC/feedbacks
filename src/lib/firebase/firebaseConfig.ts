@@ -2,7 +2,8 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
 import { Auth, getAuth } from "firebase/auth";
-import { Firestore, getFirestore } from "firebase/firestore";
+import { Firestore, getFirestore, connectFirestoreEmulator } from "firebase/firestore";
+import { connectAuthEmulator } from "firebase/auth";
 import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check"; 
 
 // Your web app's Firebase configuration
@@ -44,6 +45,38 @@ if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
     try {
       auth = getAuth(app);
       db = getFirestore(app);
+
+      // Connect to emulators in development mode on the client side
+      if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+        if (process.env.NEXT_PUBLIC_USE_EMULATOR === 'true') {
+          try {
+            // Check if emulator is already connected to avoid errors
+            const authSettings = auth.settings;
+            if (!authSettings?.emulatorConfig) {
+              connectAuthEmulator(auth, 'http://localhost:9099', { disableWarnings: true });
+              console.log("✅ Auth Emulator connected on port 9099");
+            }
+          } catch (error: any) {
+            if (!error.message?.includes('already connected')) {
+              console.warn("Auth Emulator connection warning:", error.message);
+            }
+          }
+
+          try {
+            // Check if Firestore emulator is already connected
+            if ((db as any)._settings?.host === 'localhost') {
+              console.log("ℹ️  Firestore already connected to emulator");
+            } else {
+              connectFirestoreEmulator(db, 'localhost', 8080);
+              console.log("✅ Firestore Emulator connected on port 8080");
+            }
+          } catch (error: any) {
+            if (!error.message?.includes('already called')) {
+              console.warn("Firestore Emulator connection warning:", error.message);
+            }
+          }
+        }
+      }
 
       // Initialize App Check only on the client side to avoid SSR errors
       if (typeof window !== 'undefined') {

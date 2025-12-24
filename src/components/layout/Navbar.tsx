@@ -34,7 +34,7 @@ export function Navbar() {
         <Logo />
         <nav className="flex items-center gap-4">
            <Button variant="ghost" size="sm" asChild>
-            <Link href="https://freympc.com" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1">
+            <Link href="https://freympc.es" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1">
               <Globe size={16} /> Freym PC
             </Link>
           </Button>
